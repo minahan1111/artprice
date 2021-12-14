@@ -1,6 +1,12 @@
 # Topic : '미술품이 갖는 특징과 경제적 지표를 고려한 국내 작가들의 미술품 경매 가격 예측'
 
-### Researcher : 김종백, 한민아
+### Researcher
+
+김종백, 한민아
+
+## 분석 절차
+
+![methodology](readme.assets/methodology.png)
 
 # Data
 
@@ -299,5 +305,134 @@ df['price']
                 row_count+=1
         ```
 
+## KOSPI_Close, WTI_Close, rate_Close
+
+- investing.kr 에서 제공받은 데이터
+
+![kospi_dataset](readme.assets/kospi_dataset.png)
+
+- 일자와 종가를 제외하고는 전부 제거
+- merge 할 때 같은 이름으로 매치시키기 위해 일자를 date로 미술품 데이터와 일치시키고 종가는 KOSPI_Close와 같은 이름으로 feature화 함
+- investing.kr에서 받은 date 데이터가 datetime 데이터가 아니라 object이므로 이를 datetime화 함(엑셀 파일에서 표시 형식을 일/월/년으로 바꿔주고 난 뒤에 할 것)
+- 제거되고 남은 데이터프레임을 위에서 작업한 미술품 데이터와 merge
+
+```python
+kospi = kospi.rename(columns={'일자': 'date', '종가':'KOSPI_Close'})
+kospi['date'] = pd.to_datetime(kospi['date'])
+df = pd.merge(df, kospi, left_on='date', right_on='date', how='left')
+df.drop(['Unnamed: 0'],axis='columns',inplace=True)
+```
+
+## Estate_rate
+
+- 2016년 1월부터 현재까지의 부동산 가격 비율을 제공된 파일을 참고하여 dict로 만듦.
+- 결합된 df의 month를 가져와서 해당 미술품의 경매 낙찰연도와 월을 추출함.
+- 추출한 연과 월을 바탕으로, dict에서 해당되는 비율을 가져옴.
+
+## Features
+
+![feature_1](readme.assets/feature_1.png)
+
+![feature_2](readme.assets/feature_2.png)
+
 # Modeling
+
+## MinMaxScaler
+
+- 수치 데이터에 대해 MinMaxScaler로 특정 값이 종속변수에 큰 영향을 미치지 못하게 조정함
+
+## Correlation
+
+- 종속변수 price에 대해 다른 값들이 얼마나 많은 영향을 끼치고 있는지 heatmap으로 표현
+
+![corr_heatmap](readme.assets/corr_heatmap.png)
+
+- 주요 features(절대값 기준)
+
+![corr](readme.assets/corr.png)
+
+## Modeling
+
+- 분석 방식 : Regression
+- 모델
+  - Ridge
+  - Lasso
+  - RandomForest
+  - Train / Test = 7 :3
+  - random_seed = 42
+- 분석 대상
+  - 전체 데이터
+  - 작가별 데이터
+  - 장르별 데이터
+- 평가 방식
+  - RMSE
+- 학습 코드 예시
+
+```python
+df_author_0 = df_corr[df_corr['author']==0] #화백 코드 0번 데이터를 추출
+df_author_0['price_scale'] = 0 #가격에 대해서 최대/최소 정규화
+max_val = max(df_author_0['price'])
+min_val = min(df_author_0['price'])
+df_author_0['price_scale'] = (df_author_0['price']-min_val)/(max_val-min_val)
+
+X_0 = df_author_0.drop(['price', 'price_scale'], axis=1)
+y_0 = df_author_0['price_scale']
+
+X_train_0, X_test_0, y_train_0, y_test_0 = train_test_split(X_0, y_0, test_size=0.3, shuffle=True, random_state=42)
+print("훈련용 데이터 길이 : ", len(X_train_0))
+print("평가용 데이터 길이 : ", len(X_test_0))
+reg_0 = LinearRegression(n_jobs=-1).fit(X_train_0, y_train_0)
+y_linear_pred_0 = reg_0.predict(X_test_0)
+RMSE_linear_0 = mean_squared_error(y_test_0, y_linear_pred_0)**0.5
+print("Linear Regression RMSE : ", RMSE_linear_0)
+
+rdg_0 = Ridge(alpha=0.01)
+rdg_0.fit(X_train_0, y_train_0)
+y_ridge_pred_0 = rdg_0.predict(X_test_0)
+RMSE_ridge_0 = mean_squared_error(y_test_0, y_ridge_pred_0)**0.5
+print("Ridge RMSE : ", RMSE_ridge_0)
+
+lasso_0 = Lasso(alpha=0.01)
+lasso_0.fit(X_train_0, y_train_0)
+y_lasso_pred_0 = lasso_0.predict(X_test_0)
+RMSE_lasso_0 = mean_squared_error(y_test_0, y_lasso_pred_0)**0.5
+print("Lasso RMSE : ", RMSE_lasso_0)
+
+rf_0 = RandomForestRegressor()
+rf_0.fit(X_train_0, y_train_0)
+y_rf_pred_0 = rf_0.predict(X_test_0)
+RMSE_rf_0 = mean_squared_error(y_test_0, y_rf_pred_0)**0.5
+print("Random Forest RMSE : ", RMSE_rf_0)
+```
+
+
+
+# Visualization
+
+- 작가별, 장르별 대상으로 line chart 작성
+  - 실제 값(blue line)
+  - Ridge_prediction(orange line)
+  - Lasso_prediction(green line)
+  - RandomForest_prediction(red line)
+- Example
+
+![total](readme.assets/total.png)
+
+```python
+#시각화 작업을 반복해서 실행할 수 있게 만든 함수
+def visualize(name, test, ridge, lasso, rf): 
+    x_columns = [i for i in range(len(test))]
+
+    plt.plot(x_columns, test, label='y_test')
+    # plt.plot(x_columns, y_linear_pred, label='linear_regression')
+    plt.plot(x_columns, ridge, label='ridge')
+    plt.plot(x_columns, lasso, label='lasso')
+    plt.plot(x_columns, rf, label='randomforest')
+    plt.legend(loc='best', ncol=2, fontsize=14)
+
+    plt.title(f"{name}", fontsize=45)
+    plt.xlabel("Pictures",fontsize=43)
+    plt.ylabel("Values",fontsize=43)
+    plt.show()
+```
 
